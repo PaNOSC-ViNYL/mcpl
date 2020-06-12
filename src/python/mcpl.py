@@ -1009,7 +1009,9 @@ import openpmd_api as api
 import numpy as np
 
 def convert2openPMD(mcplfile,outfile):
-    """Read particle contents of mcplfile and write into outfile using openPMD API """
+    """Read particle contents of mcplfile and write into outfile using openPMD API 
+    Only neutrons! Only for McStas mcpl file 
+    """
     fin = mcplfile if isinstance(mcplfile,MCPLFile) else MCPLFile(mcplfile)
     series = api.Series( outfile.name, api.Access_Type.create)
     series.set_attribute("openPMDextension", "BeamPhysics;SpeciesType")
@@ -1020,38 +1022,55 @@ def convert2openPMD(mcplfile,outfile):
     #curStep.set_attribute("step", np.uint64(0))
     #curStep.set_attribute("stepOffset", np.uint64(0))
     #curStep.set_attribute("timeOffset", np.float32(0))
-    
+
+    chunksize=10
     neutrons = curStep.particles["neutrons"]
     neutrons.set_attribute("speciesType", "2112")
-    neutrons.set_attribute("numParticles", fin.nparticles)
+    patch = neutrons.particle_patches #(fin.nparticles/chunksize)
+    patch.set_attribute("numParticles", chunksize)
 
     # I'm unable to write in chunks, I don't understand the logic 
-    chunksize=(fin.nparticles,)
-    d = api.Dataset( api.Datatype.FLOAT, extent=chunksize)
-    neutrons["position"]["x"].reset_dataset(d)
-    neutrons["position"]["y"].reset_dataset(d)
-    neutrons["position"]["z"].reset_dataset(d)
 
-    position = np.empty((3,0),dtype=np.float32)
+    d = api.Dataset( api.Datatype.FLOAT, extent=[fin.nparticles])
+
+    for var in [ 'x', 'y', 'z', 'ux', 'uy', 'uz']:
+        neutrons["position"][var].reset_dataset(d)
+
+    
+    position = {
+        'x':[],
+        'y':[],
+        'z':[],
+        'ux':[],
+        'uy':[],
+        'uz':[]
+    } # x,y,z
     # can we reserve chunksize?
     for idx,p in enumerate(fin.particles):
-        # if (idx) % chunksize[0] == 0:
-        #     print(idx,position)
+        if idx % chunksize == 0 and idx>0:
+            for var in [ 'x', 'y', 'z', 'ux', 'uy', 'uz']:
+                neutrons["position"][var].store_chunk(np.array(position[var], dtype=np.float32),[idx-chunksize],[chunksize]) 
+            series.flush()
+            del position
+            position = {
+                'x':[],
+                'y':[],
+                'z':[],
+                'ux':[],
+                'uy':[],
+                'uz':[]
+            } # x,y,z
 
-        #     neutrons["position"]["x"].store_chunk(position[0])
-        #     neutrons["position"]["y"].store_chunk(position[1])
-        #     neutrons["position"]["z"].store_chunk(position[2])
-        #     series.flush()
-        #     position = np.empty((3,0),dtype=np.float32)
+            # series.flush()
+        position['x'].append(p.x)
+        position['y'].append(p.y)
+        position['z'].append(p.z)
+        position['ux'].append(p.ux)
+        position['uy'].append(p.uy)
+        position['uz'].append(p.uz)
 
-        #if idx >= 10:
-        #    break
-        position =np.append(position, [[p.x],[p.y],[p.z]], axis=1)
-    neutrons["position"]["x"].store_chunk(position[0])
-    neutrons["position"]["y"].store_chunk(position[1])
-    neutrons["position"]["z"].store_chunk(position[2])
-    series.flush()
-
+        if idx > 100:
+            break
         
 def convert2ascii(mcplfile,outfile):
     """Read particle contents of mcplfile and write into outfile using a simple ASCII-based format"""
