@@ -1005,6 +1005,54 @@ def dump_file(filename,header=True,particles=True,limit=10,skip=0,**kwargs):
     if particles:
         f.dump_particles(limit=limit,skip=skip)
 
+import openpmd_api as api
+import numpy as np
+
+def convert2openPMD(mcplfile,outfile):
+    """Read particle contents of mcplfile and write into outfile using openPMD API """
+    fin = mcplfile if isinstance(mcplfile,MCPLFile) else MCPLFile(mcplfile)
+    series = api.Series( outfile.name, api.Access_Type.create)
+    series.set_attribute("openPMDextension", "BeamPhysics;SpeciesType")
+    series.set_software("mcpltool openpmd-api")
+    series.set_particles_path("particles")
+    curStep = series.iterations[0]
+    #curStep.set_time(0.0).set_time_unit_SI(1e-15)
+    #curStep.set_attribute("step", np.uint64(0))
+    #curStep.set_attribute("stepOffset", np.uint64(0))
+    #curStep.set_attribute("timeOffset", np.float32(0))
+    
+    neutrons = curStep.particles["neutrons"]
+    neutrons.set_attribute("speciesType", "2112")
+    neutrons.set_attribute("numParticles", fin.nparticles)
+
+    # I'm unable to write in chunks, I don't understand the logic 
+    chunksize=(fin.nparticles,)
+    d = api.Dataset( api.Datatype.FLOAT, extent=chunksize)
+    neutrons["position"]["x"].reset_dataset(d)
+    neutrons["position"]["y"].reset_dataset(d)
+    neutrons["position"]["z"].reset_dataset(d)
+
+    position = np.empty((3,0),dtype=np.float32)
+    # can we reserve chunksize?
+    for idx,p in enumerate(fin.particles):
+        # if (idx) % chunksize[0] == 0:
+        #     print(idx,position)
+
+        #     neutrons["position"]["x"].store_chunk(position[0])
+        #     neutrons["position"]["y"].store_chunk(position[1])
+        #     neutrons["position"]["z"].store_chunk(position[2])
+        #     series.flush()
+        #     position = np.empty((3,0),dtype=np.float32)
+
+        #if idx >= 10:
+        #    break
+        position =np.append(position, [[p.x],[p.y],[p.z]], axis=1)
+    neutrons["position"]["x"].store_chunk(position[0])
+    neutrons["position"]["y"].store_chunk(position[1])
+    neutrons["position"]["z"].store_chunk(position[2])
+    series.flush()
+
+        
 def convert2ascii(mcplfile,outfile):
     """Read particle contents of mcplfile and write into outfile using a simple ASCII-based format"""
     fin = mcplfile if isinstance(mcplfile,MCPLFile) else MCPLFile(mcplfile)
@@ -1093,6 +1141,7 @@ def app_pymcpltool(argv=None):
     opt_stats = False
     opt_pdf = False
     opt_gui = False
+    opt_openpmd = False
     filelist = []
     def bad(errmsg):
         _pymcpltool_usage(progname,errmsg)
@@ -1105,6 +1154,7 @@ def app_pymcpltool(argv=None):
             elif a==str('--pdf'): opt_pdf=True
             elif a==str('--gui'): opt_gui=True
             elif a==str('--text'): opt_text=True
+            elif a==str('--openpmd'): opt_openpmd=True
             elif a==str('--help'): _pymcpltool_usage(progname)
             else: bad(str("Unrecognised option : %s")%a)
         elif a.startswith(str('-')):
@@ -1140,7 +1190,7 @@ def app_pymcpltool(argv=None):
             filelist += [a]
     number_dumpopts = sum(1 for e in (opt_justhead,opt_nohead,opt_limit is not None,opt_skip is not None,opt_blobkey) if e)
     numper_statopts = sum(1 for e in (opt_stats,opt_pdf,opt_gui) if e)
-    if sum(1 for e in (opt_version,opt_text,number_dumpopts,numper_statopts) if e)>1:
+    if sum(1 for e in (opt_version,opt_text,opt_openpmd,number_dumpopts,numper_statopts) if e)>1:
         bad('Conflicting options specified.')
     if number_dumpopts>1 and opt_blobkey:
         bad("Do not specify other dump options with -b.")
@@ -1157,6 +1207,22 @@ def app_pymcpltool(argv=None):
         print("MCPL version %s"%__version__)
         sys.exit(0)
 
+    if opt_openpmd:
+        if len(filelist)>2:
+            bad("Too many arguments.")
+        if len(filelist)!=2:
+            bad("Must specify both input and output files with --openpmd.")
+        if (os.path.exists(filelist[1])):
+            bad("Requested output file already exists.")
+        try:
+            fout = open(filelist[1],'w')
+        except (IOError,OSError) as e:
+            fout = None
+        if not fout:
+            raise MCPLError('Could not open output file.')
+        convert2openPMD(filelist[0],fout)
+        sys.exit(0)
+        
     if opt_text:
         if len(filelist)>2:
             bad("Too many arguments.")
