@@ -1007,6 +1007,19 @@ def dump_file(filename,header=True,particles=True,limit=10,skip=0,**kwargs):
 
 import openpmd_api as api
 import numpy as np
+vars = [ 'position', 'direction']
+dims = [ 'x', 'y', 'z']
+
+def initdata(vars, dims):
+    d = { }
+    for var in vars:
+        d[var]=dict()
+        for dim in dims:
+            d[var][dim] = list()
+    d['weight'] = list()
+    d['ekin'] = list()
+    d['time'] = list()
+    return d
 
 def convert2openPMD(mcplfile,outfile):
     """Read particle contents of mcplfile and write into outfile using openPMD API 
@@ -1018,7 +1031,7 @@ def convert2openPMD(mcplfile,outfile):
     series.set_software("mcpltool openpmd-api")
     series.set_particles_path("particles")
     curStep = series.iterations[0]
-    #curStep.set_time(0.0).set_time_unit_SI(1e-15)
+    curStep.set_time(0.0).set_time_unit_SI(1e-3)
     #curStep.set_attribute("step", np.uint64(0))
     #curStep.set_attribute("stepOffset", np.uint64(0))
     #curStep.set_attribute("timeOffset", np.float32(0))
@@ -1033,44 +1046,49 @@ def convert2openPMD(mcplfile,outfile):
 
     d = api.Dataset( api.Datatype.FLOAT, extent=[fin.nparticles])
 
-    for var in [ 'x', 'y', 'z', 'ux', 'uy', 'uz']:
-        neutrons["position"][var].reset_dataset(d)
+    for var in vars:
+        for dim in dims:
+            neutrons[var][dim].reset_dataset(d)
+            neutrons[var][dim].set_unit_SI(1e-2) # cm
+        if var == 'position':
+            neutrons[var].set_unit_dimension({api.Unit_Dimension.L: 1})
 
-    
-    position = {
-        'x':[],
-        'y':[],
-        'z':[],
-        'ux':[],
-        'uy':[],
-        'uz':[]
-    } # x,y,z
+    data = initdata(vars,dims)
+    SCALAR = api.Record_Component.SCALAR
+    neutrons["weight"][SCALAR].reset_dataset(d)
+    neutrons['time'][SCALAR].reset_dataset(d)
+    neutrons['time'].set_unit_dimension({api.Unit_Dimension.T: 1})
+    neutrons['time'][SCALAR].set_unit_SI(1e-3)
+    neutrons['ekin'][SCALAR].reset_dataset(d)
+    neutrons['ekin'].set_unit_dimension({api.Unit_Dimension.M: 1,
+                                         api.Unit_Dimension.L: 2,
+                                         api.Unit_Dimension.T: -2})
+    neutrons['ekin'][SCALAR].set_unit_SI(1.6021766e-13) # MeV
+    #neutrons['time'][SCALAR].unit_SI = 1e-3
     # can we reserve chunksize?
     for idx,p in enumerate(fin.particles):
         if idx % chunksize == 0 and idx>0:
-            for var in [ 'x', 'y', 'z', 'ux', 'uy', 'uz']:
-                neutrons["position"][var].store_chunk(np.array(position[var], dtype=np.float32),[idx-chunksize],[chunksize]) 
+            for var in vars:
+                for dim in dims:
+                    neutrons[var][dim].store_chunk(np.array(data[var][dim], dtype=np.float32), [idx-chunksize], [chunksize])
+                    
+            neutrons['weight'][SCALAR].store_chunk(np.array(data['weight'], dtype=np.float32), [idx-chunksize], [chunksize])
             series.flush()
-            del position
-            position = {
-                'x':[],
-                'y':[],
-                'z':[],
-                'ux':[],
-                'uy':[],
-                'uz':[]
-            } # x,y,z
+            del data
+            data = initdata(vars, dims)
 
             # series.flush()
-        position['x'].append(p.x)
-        position['y'].append(p.y)
-        position['z'].append(p.z)
-        position['ux'].append(p.ux)
-        position['uy'].append(p.uy)
-        position['uz'].append(p.uz)
-
-        if idx > 100:
-            break
+        data['position']['x'].append(p.x)
+        data['position']['y'].append(p.y)
+        data['position']['z'].append(p.z)
+        data['direction']['x'].append(p.ux)
+        data['direction']['y'].append(p.uy)
+        data['direction']['z'].append(p.uz)
+        data['weight'].append(p.weight)
+        data['ekin'].append(p.ekin)
+        data['time'].append(p.time)
+        #if idx > 100:
+        #    break
         
 def convert2ascii(mcplfile,outfile):
     """Read particle contents of mcplfile and write into outfile using a simple ASCII-based format"""
@@ -1129,6 +1147,7 @@ Other options:
   -t, --text MCPLFILE OUTFILE
                     Read particle contents of MCPLFILE and write into OUTFILE
                     using a simple ASCII-based format.
+  --openpmd MCPLFILE OUTFILE
   -v, --version   : Display version of MCPL installation.
   -h, --help      : Display this usage information (ignores all other options).
 """
