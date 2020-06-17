@@ -1007,21 +1007,23 @@ def dump_file(filename,header=True,particles=True,limit=10,skip=0,**kwargs):
 
 import openpmd_api as api
 import numpy as np
-vars = [ 'position', 'direction']
-dims = [ 'x', 'y', 'z']
 
-def initdata(vars, dims):
+def initdata():
+    vars = [ 'position', 'direction']
+    dims = [ 'x', 'y', 'z']
+    scalars = ['weight', 'ekin', 'time']
+    
     d = { }
     for var in vars:
         d[var]=dict()
         for dim in dims:
             d[var][dim] = list()
-    d['weight'] = list()
-    d['ekin'] = list()
-    d['time'] = list()
-    return d
+    for scalar in scalars:
+        d[scalar] = list()
 
-def convert2openPMD(mcplfile,outfile):
+    return d, vars, dims, scalars
+
+def convert2openPMD(mcplfile,outfile,chunksize=50000,maxevents=5000000):
     """Read particle contents of mcplfile and write into outfile using openPMD API 
     Only neutrons! Only for McStas mcpl file 
     """
@@ -1036,16 +1038,14 @@ def convert2openPMD(mcplfile,outfile):
     #curStep.set_attribute("stepOffset", np.uint64(0))
     #curStep.set_attribute("timeOffset", np.float32(0))
 
-    chunksize=10
     neutrons = curStep.particles["neutrons"]
     neutrons.set_attribute("speciesType", "2112")
     patch = neutrons.particle_patches #(fin.nparticles/chunksize)
-    patch.set_attribute("numParticles", chunksize)
+    patch.set_attribute("numParticles", min(fin.nparticles,maxevents))
 
-    # I'm unable to write in chunks, I don't understand the logic 
+    d = api.Dataset( api.Datatype.FLOAT, extent=[min(fin.nparticles,maxevents)])
 
-    d = api.Dataset( api.Datatype.FLOAT, extent=[fin.nparticles])
-
+    data, vars, dims, scalars = initdata()
     for var in vars:
         for dim in dims:
             neutrons[var][dim].reset_dataset(d)
@@ -1053,8 +1053,8 @@ def convert2openPMD(mcplfile,outfile):
         if var == 'position':
             neutrons[var].set_unit_dimension({api.Unit_Dimension.L: 1})
 
-    data = initdata(vars,dims)
     SCALAR = api.Record_Component.SCALAR
+
     neutrons["weight"][SCALAR].reset_dataset(d)
     neutrons['time'][SCALAR].reset_dataset(d)
     neutrons['time'].set_unit_dimension({api.Unit_Dimension.T: 1})
@@ -1064,18 +1064,26 @@ def convert2openPMD(mcplfile,outfile):
                                          api.Unit_Dimension.L: 2,
                                          api.Unit_Dimension.T: -2})
     neutrons['ekin'][SCALAR].set_unit_SI(1.6021766e-13) # MeV
-    #neutrons['time'][SCALAR].unit_SI = 1e-3
-    # can we reserve chunksize?
+
+
     for idx,p in enumerate(fin.particles):
-        if idx % chunksize == 0 and idx>0:
+        if (idx % chunksize == 0 and idx>0) or idx>=maxevents:
+            siz = len(data['time'])
+            print(idx, chunksize, idx-chunksize) 
             for var in vars:
                 for dim in dims:
-                    neutrons[var][dim].store_chunk(np.array(data[var][dim], dtype=np.float32), [idx-chunksize], [chunksize])
+                    data[var][dim] = np.array(np.array(data[var][dim], dtype=np.float32))
+                    neutrons[var][dim].store_chunk(data[var][dim], [idx-siz], [siz])
                     
-            neutrons['weight'][SCALAR].store_chunk(np.array(data['weight'], dtype=np.float32), [idx-chunksize], [chunksize])
+            for name in scalars:
+                data[name] = np.array(data[name],dtype=np.float32)
+                neutrons[name][SCALAR].store_chunk(data[name], [idx-siz], [siz])
+
             series.flush()
             del data
-            data = initdata(vars, dims)
+            data, vars, dims, scalars = initdata()
+            if idx >= maxevents:
+                break
 
             # series.flush()
         data['position']['x'].append(p.x)
@@ -1087,8 +1095,9 @@ def convert2openPMD(mcplfile,outfile):
         data['weight'].append(p.weight)
         data['ekin'].append(p.ekin)
         data['time'].append(p.time)
-        #if idx > 100:
-        #    break
+    series.flush()
+    del data
+
         
 def convert2ascii(mcplfile,outfile):
     """Read particle contents of mcplfile and write into outfile using a simple ASCII-based format"""
