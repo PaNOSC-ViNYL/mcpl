@@ -1023,11 +1023,14 @@ def initdata():
 
     return d, vars, dims, scalars
 
-def convert2openPMD(mcplfile,outfile,chunksize=50000,maxevents=5000000):
+def convert2openPMD(mcplfile,outfile,chunksize=50000,maxevents=500000):
     """Read particle contents of mcplfile and write into outfile using openPMD API 
     Only neutrons! Only for McStas mcpl file 
     """
     fin = mcplfile if isinstance(mcplfile,MCPLFile) else MCPLFile(mcplfile)
+    if maxevents<0 or maxevents>fin.nparticles:
+        maxevents=fin.nparticles
+        
     series = api.Series( outfile.name, api.Access_Type.create)
     series.set_attribute("openPMDextension", "BeamPhysics;SpeciesType")
     series.set_software("mcpltool openpmd-api")
@@ -1040,10 +1043,10 @@ def convert2openPMD(mcplfile,outfile,chunksize=50000,maxevents=5000000):
 
     neutrons = curStep.particles["neutrons"]
     neutrons.set_attribute("speciesType", "2112")
-    patch = neutrons.particle_patches #(fin.nparticles/chunksize)
-    patch.set_attribute("numParticles", min(fin.nparticles,maxevents))
+    patch = neutrons.particle_patches
+    patch.set_attribute("numParticles", maxevents)
 
-    d = api.Dataset( api.Datatype.FLOAT, extent=[min(fin.nparticles,maxevents)])
+    d = api.Dataset( api.Datatype.FLOAT, extent=[maxevents])
 
     data, vars, dims, scalars = initdata()
     for var in vars:
